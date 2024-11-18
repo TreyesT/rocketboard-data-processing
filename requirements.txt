@@ -1,1 +1,7 @@
 flask
+pandas
+sqlalchemy
+sentence_transformers
+scikit-learn
+numpy
+joblib

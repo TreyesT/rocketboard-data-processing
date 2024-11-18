@@ -1,8 +1,27 @@
 from flask import Flask, jsonify, request
+import difflib
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+import pandas as pd
+import joblib
+
+
+
 
 app = Flask(__name__)
 
-# Problem 2: Field Name Ambiguity - Allow users to review field mappings
+def detect_similar_fields(fields_local, fields_new):
+    """ Detects similar fields between two sets """
+    field_map = {}
+    for field in fields_new:
+        match = difflib.get_close_matches(field, fields_local, n=1)
+        if match:
+            field_map[field] = match[0]  # Match found
+        else:
+            field_map[field] = None  # No close match found
+    return field_map
+
 @app.route('/review-mappings', methods=['POST'])
 def review_field_mappings():
     local_data = request.json.get('local_data', [])
@@ -15,28 +34,33 @@ def review_field_mappings():
     fields_local = set(local_data[0].keys()) if local_data else set()
     fields_new = set(new_data[0].keys()) if new_data else set()
 
-    # Automatically detect field mappings (based on identical field names)
+    # Automatically detect field mappings (based on identical and similar field names)
     field_map = {field: field for field in fields_local.intersection(fields_new)}
+    similar_field_map = detect_similar_fields(fields_local, fields_new)
 
-    # Return field mappings for review
     return jsonify({
         'message': 'Review these field mappings',
-        'field_mapping_suggestions': field_map
+        'field_mapping_suggestions': field_map,
+        'similar_field_map': similar_field_map
     })
 
 
 # Problem 3: Field Type Inconsistencies - Check if field types are compatible
 def check_field_type_compatibility(doc1, doc2, field_map):
+    """ Check if field types are compatible """
     incompatible_fields = []
-
     for field1, field2 in field_map.items():
-        value1 = doc1.get(field1, None)
-        value2 = doc2.get(field2, None)
+        value1 = doc1.get(field1)
+        value2 = doc2.get(field2)
 
         if value1 is not None and value2 is not None:
             if type(value1) != type(value2):
-                incompatible_fields.append((field1, field2, type(value1), type(value2)))
-
+                incompatible_fields.append({
+                    'field1': field1,
+                    'field2': field2,
+                    'type1': str(type(value1)),
+                    'type2': str(type(value2))
+                })
     return incompatible_fields
 
 
@@ -91,24 +115,30 @@ def merge_databases():
     # Prepare for merging
     all_fields = fields_local.union(fields_new)
     merged_data = []
+    nullified_fields = []  # To store the nullified fields per document
 
     for doc1 in local_data:
-        # Find matching document in new_data
         match = next((d for d in new_data if is_duplicate(doc1, d)), None)
+        nullified = {}
+
         if match:
             # Merge data from new_data into local_data
             merged_doc = {**doc1}  # Start with doc1's data
 
-            # Copy all fields from new_data (doc2) if they're not already in doc1
             for field in fields_new:
                 if field not in merged_doc or not merged_doc.get(field):
                     merged_doc[field] = match.get(field)
+                    # Track fields that are nullified
+                    if merged_doc[field] is None:
+                        nullified[field] = merged_doc[field]
 
             merged_doc = handle_missing_fields(merged_doc, all_fields)  # Handle missing fields
             merged_data.append(merged_doc)
         else:
             doc1 = handle_missing_fields(doc1, all_fields)  # Handle missing fields in local_data
             merged_data.append(doc1)
+
+        nullified_fields.append(nullified)  # Add nullified info for the current document
 
     # Add any documents from new_data that weren't in local_data
     for doc2 in new_data:
@@ -119,10 +149,141 @@ def merge_databases():
     return jsonify({
         'message': 'Data merged successfully!',
         'merged_data': merged_data,
+        'nullified_fields': nullified_fields,  # Return the nullified fields
         'merged_count': len(merged_data)
     })
 
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port = 5000)
+@app.route('/ai/analyze-fields', methods=['POST'])
+def ai_analyze_fields():
+    """New endpoint for AI-powered field analysis"""
+    try:
+        data = request.get_json()
+        local_data = data.get('local_data', [])
+        new_data = data.get('new_data', [])
 
+        if not local_data or not new_data:
+            return jsonify({
+                'error': 'Both local_data and new_data are required',
+                'status': 'error'
+            }), 400
+
+        # Initialize AI components
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+
+        # Analyze fields
+        fields_local = set(local_data[0].keys())
+        fields_new = set(new_data[0].keys())
+
+        # Get embeddings
+        local_embeddings = model.encode(list(fields_local))
+        new_embeddings = model.encode(list(fields_new))
+
+        # Calculate similarities
+        similarity_matrix = cosine_similarity(new_embeddings, local_embeddings)
+
+        field_analysis = {}
+        for i, new_field in enumerate(fields_new):
+            best_match_idx = np.argmax(similarity_matrix[i])
+            best_match_field = list(fields_local)[best_match_idx]
+            semantic_similarity = float(similarity_matrix[i][best_match_idx])
+
+            # Calculate lexical similarity
+            lexical_similarity = difflib.SequenceMatcher(
+                None, new_field, best_match_field
+            ).ratio()
+
+            field_analysis[new_field] = {
+                'best_match': best_match_field,
+                'semantic_similarity': semantic_similarity,
+                'lexical_similarity': lexical_similarity,
+                'combined_score': (0.7 * semantic_similarity + 0.3 * lexical_similarity),
+                'sample_values': {
+                    'source': [str(d.get(new_field))[:100] for d in new_data[:3]],
+                    'target': [str(d.get(best_match_field))[:100] for d in local_data[:3]]
+                }
+            }
+
+        return jsonify({
+            'status': 'success',
+            'analysis': field_analysis,
+            'statistics': {
+                'total_fields_analyzed': len(fields_new),
+                'potential_matches': len([f for f in field_analysis.values()
+                                          if f['combined_score'] > 0.8])
+            }
+        })
+
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'status': 'error'
+        }), 500
+
+
+@app.route('/ai/review-mappings', methods=['POST'])
+def ai_review_mappings():
+    """AI-enhanced field mapping review"""
+    try:
+        data = request.get_json()
+        local_data = data.get('local_data', [])
+        new_data = data.get('new_data', [])
+        threshold = float(request.args.get('threshold', '0.8'))
+
+        if not local_data or not new_data:
+            return jsonify({
+                'error': 'Both local_data and new_data are required',
+                'status': 'error'
+            }), 400
+
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+
+        fields_local = set(local_data[0].keys())
+        fields_new = set(new_data[0].keys())
+
+        # Get embeddings and similarities
+        local_embeddings = model.encode(list(fields_local))
+        new_embeddings = model.encode(list(fields_new))
+        similarity_matrix = cosine_similarity(new_embeddings, local_embeddings)
+
+        # Generate mapping suggestions
+        mapping_suggestions = {}
+        for i, new_field in enumerate(fields_new):
+            scores = similarity_matrix[i]
+            top_matches = [
+                {
+                    'field': list(fields_local)[idx],
+                    'score': float(score),
+                    'sample_values': [
+                        str(d.get(list(fields_local)[idx]))[:100]
+                        for d in local_data[:2]
+                    ]
+                }
+                for idx, score in enumerate(scores)
+                if score > threshold
+            ]
+
+            if top_matches:
+                mapping_suggestions[new_field] = {
+                    'matches': sorted(top_matches, key=lambda x: x['score'], reverse=True),
+                    'sample_values': [str(d.get(new_field))[:100] for d in new_data[:2]]
+                }
+
+        return jsonify({
+            'status': 'success',
+            'mapping_suggestions': mapping_suggestions,
+            'summary': {
+                'fields_mapped': len(mapping_suggestions),
+                'fields_unmapped': len(fields_new) - len(mapping_suggestions)
+            }
+        })
+
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'status': 'error'
+        }), 500
+
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5002)
