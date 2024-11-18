@@ -95,7 +95,6 @@ def handle_missing_fields(doc, required_fields):
     return doc
 
 
-# Main Merge Endpoint that incorporates all problems (2-6)
 @app.route('/merge', methods=['POST'])
 def merge_databases():
     local_data = request.json.get('local_data', [])
@@ -117,13 +116,23 @@ def merge_databases():
     merged_data = []
     nullified_fields = []  # To store the nullified fields per document
 
+    # Keep track of processed new_data documents
+    processed_new_data = set()
+
     # Merge existing data if any
     if local_data:
         for doc1 in local_data:
-            match = next((d for d in new_data if is_duplicate(doc1, d)), None)
+            match_index = None
+            for idx, d in enumerate(new_data):
+                if is_duplicate(doc1, d):
+                    match_index = idx
+                    break
             nullified = {}
 
-            if match:
+            if match_index is not None:
+                match = new_data[match_index]
+                processed_new_data.add(match_index)
+
                 # Merge data from new_data into local_data
                 merged_doc = {**doc1}  # Start with doc1's data
 
@@ -141,6 +150,13 @@ def merge_databases():
                 merged_data.append(doc1)
 
             nullified_fields.append(nullified)  # Add nullified info for the current document
+
+        # Add any documents from new_data that weren't matched
+        for idx, doc2 in enumerate(new_data):
+            if idx not in processed_new_data:
+                doc2 = handle_missing_fields(doc2, all_fields)  # Handle missing fields in new_data
+                merged_data.append(doc2)
+
     else:
         # If local_data is empty, simply add new_data to merged_data
         for doc2 in new_data:
