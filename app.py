@@ -102,8 +102,8 @@ def merge_databases():
     new_data = request.json.get('new_data', [])
     resolution_strategy = request.args.get('resolution_strategy', 'db1_priority')
 
-    if not local_data or not new_data:
-        return jsonify({'error': 'Both local_data and new_data are required'}), 400
+    if not new_data:
+        return jsonify({'error': 'new_data is required'}), 400
 
     # Get field names
     fields_local = set(local_data[0].keys()) if local_data else set()
@@ -117,32 +117,33 @@ def merge_databases():
     merged_data = []
     nullified_fields = []  # To store the nullified fields per document
 
-    for doc1 in local_data:
-        match = next((d for d in new_data if is_duplicate(doc1, d)), None)
-        nullified = {}
+    # Merge existing data if any
+    if local_data:
+        for doc1 in local_data:
+            match = next((d for d in new_data if is_duplicate(doc1, d)), None)
+            nullified = {}
 
-        if match:
-            # Merge data from new_data into local_data
-            merged_doc = {**doc1}  # Start with doc1's data
+            if match:
+                # Merge data from new_data into local_data
+                merged_doc = {**doc1}  # Start with doc1's data
 
-            for field in fields_new:
-                if field not in merged_doc or not merged_doc.get(field):
-                    merged_doc[field] = match.get(field)
-                    # Track fields that are nullified
-                    if merged_doc[field] is None:
-                        nullified[field] = merged_doc[field]
+                for field in fields_new:
+                    if field not in merged_doc or not merged_doc.get(field):
+                        merged_doc[field] = match.get(field)
+                        # Track fields that are nullified
+                        if merged_doc[field] is None:
+                            nullified[field] = merged_doc[field]
 
-            merged_doc = handle_missing_fields(merged_doc, all_fields)  # Handle missing fields
-            merged_data.append(merged_doc)
-        else:
-            doc1 = handle_missing_fields(doc1, all_fields)  # Handle missing fields in local_data
-            merged_data.append(doc1)
+                merged_doc = handle_missing_fields(merged_doc, all_fields)  # Handle missing fields
+                merged_data.append(merged_doc)
+            else:
+                doc1 = handle_missing_fields(doc1, all_fields)  # Handle missing fields in local_data
+                merged_data.append(doc1)
 
-        nullified_fields.append(nullified)  # Add nullified info for the current document
-
-    # Add any documents from new_data that weren't in local_data
-    for doc2 in new_data:
-        if not any(is_duplicate(doc2, d) for d in local_data):
+            nullified_fields.append(nullified)  # Add nullified info for the current document
+    else:
+        # If local_data is empty, simply add new_data to merged_data
+        for doc2 in new_data:
             doc2 = handle_missing_fields(doc2, all_fields)  # Handle missing fields in new_data
             merged_data.append(doc2)
 
