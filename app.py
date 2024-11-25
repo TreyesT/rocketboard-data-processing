@@ -7,10 +7,12 @@ import pandas as pd
 import joblib
 import os
 from functools import wraps
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
-# Retrieve the API token from the environment variable
 api_token = os.environ.get('API_TOKEN')
 
 def require_auth(f):
