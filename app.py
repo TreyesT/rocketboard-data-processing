@@ -5,11 +5,23 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import pandas as pd
 import joblib
-
-
-
+import os
+from functools import wraps
 
 app = Flask(__name__)
+
+# Retrieve the API token from the environment variable
+api_token = os.environ.get('API_TOKEN')
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization', '')
+        token = auth_header.replace('Bearer ', '', 1)
+        if not token or token != api_token:
+            return jsonify({'message': 'Unauthorized'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 def detect_similar_fields(fields_local, fields_new):
     """ Detects similar fields between two sets """
@@ -96,6 +108,7 @@ def handle_missing_fields(doc, required_fields):
 
 
 @app.route('/merge', methods=['POST'])
+@require_auth
 def merge_databases():
     local_data = request.json.get('local_data', [])
     new_data = request.json.get('new_data', [])
@@ -166,7 +179,7 @@ def merge_databases():
     return jsonify({
         'message': 'Data merged successfully!',
         'merged_data': merged_data,
-        'nullified_fields': nullified_fields,  # Return the nullified fields
+        'nullified_fields': nullified_fields,
         'merged_count': len(merged_data)
     })
 
