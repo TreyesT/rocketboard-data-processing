@@ -1,7 +1,9 @@
-flask
-pandas
+flask~=3.0.3
+pandas~=2.2.3
 sqlalchemy
 sentence_transformers
-scikit-learn
-numpy
-joblib
+scikit-learn~=1.5.2
+numpy~=2.0.2
+joblib~=1.4.2
+sentence-transformers~=3.3.0
+python-dotenv~=1.0.1
