@@ -8,6 +8,8 @@ import joblib
 import os
 from functools import wraps
 from dotenv import load_dotenv
+from services.data_cleaning import detect_missing_values, outlier_detection
+
 
 load_dotenv()
 
@@ -118,6 +120,8 @@ def merge_databases():
 
     if not new_data:
         return jsonify({'error': 'new_data is required'}), 400
+
+    missing_new_data = detect_missing_values(new_data) # Check for missing data before the merging (Will share that later)
 
     # Get field names
     fields_local = set(local_data[0].keys()) if local_data else set()
@@ -316,6 +320,67 @@ def ai_review_mappings():
             'status': 'error'
         }), 500
 
+
+@app.route('/detect-missing-values', methods=['POST'])
+def detect_missing_values_endpoint():
+    try:
+        # Parse JSON body
+        json_data = request.get_json()
+        if not json_data or 'data' not in json_data:
+            return jsonify({"error": "Invalid JSON or 'data' key missing"}), 400
+
+        data = json_data['data']
+
+        # Get optional required fields
+        required_fields = json_data.get('required_fields')
+
+        # Detect missing values
+        results = detect_missing_values(data, required_fields)
+
+        # Return results as JSON
+        return jsonify(results), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/detect-outliers', methods=['POST'])
+def detect_outliers_endpoint():
+    try:
+        # Parse JSON body
+        json_data = request.get_json()
+        if not json_data or 'data' not in json_data:
+            return jsonify({"error": "Invalid JSON or 'data' key missing"}), 400
+
+        # Extract the required data
+        data = json_data['data']
+
+        # Get optional parameters
+        required_fields = json_data.get('required_fields')
+        contamination = json_data.get('contamination', 0.01)
+        n_estimators = json_data.get('n_estimators', 100)
+        random_state = json_data.get('random_state')
+
+        # Ensure numeric types where needed
+        # contamination can be float, n_estimators can be int
+        try:
+            contamination = float(contamination)
+            n_estimators = int(n_estimators)
+        except (ValueError, TypeError) as e:
+            return jsonify({"error": f"Invalid parameter type: {str(e)}"}), 400
+
+        # Detect outliers using Isolation Forest
+        results = outlier_detection(
+            data=data,
+            required_fields=required_fields,
+            contamination=contamination,
+            n_estimators=n_estimators,
+            random_state=random_state
+        )
+
+        # Return the results as JSON
+        return jsonify(results), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5002)
