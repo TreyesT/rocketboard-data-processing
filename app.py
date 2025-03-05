@@ -317,5 +317,151 @@ def ai_review_mappings():
         }), 500
 
 
+@app.route('/merge-with-mappings', methods=['POST'])
+@require_auth
+def merge_with_mappings():
+    """
+    Endpoint to merge two datasets using field mappings provided in a JSON file.
+    This endpoint is generic and works with any data structure, using only the
+    provided field mappings as a guideline for merging.
+
+    Expected JSON structure:
+    {
+        "source_data": [...],  # First dataset
+        "target_data": [...],  # Second dataset
+        "field_mappings": {    # Mapping between fields in the two datasets
+            "mappings": [
+                {"existing": "field1", "new": "field2"},
+                ...
+            ]
+        },
+        "matching_fields": ["field1", "field2"]  # Optional: Fields to use for matching records
+    }
+    """
+    try:
+        data = request.json
+
+        # Extract data from request
+        source_data = data.get('source_data', [])
+        target_data = data.get('target_data', [])
+        field_mappings = data.get('field_mappings', {}).get('mappings', [])
+
+        # Get optional matching fields, or use all mapped fields if not provided
+        matching_fields = data.get('matching_fields', [])
+
+        if not source_data or not target_data or not field_mappings:
+            return jsonify({
+                'error': 'source_data, target_data, and field_mappings are all required',
+                'status': 'error'
+            }), 400
+
+        # Create a dictionary for easier access to field mappings
+        mapping_dict = {mapping['existing']: mapping['new'] for mapping in field_mappings}
+
+        # Create reverse mapping (new -> existing) for fields that might need to be accessed both ways
+        reverse_mapping = {mapping['new']: mapping['existing'] for mapping in field_mappings}
+
+        # If no matching fields specified, try to determine them automatically
+        if not matching_fields:
+            # Use first mapping field by default
+            if field_mappings:
+                first_mapping = field_mappings[0]
+                matching_fields = [first_mapping['existing']]
+
+        # Prepare merged data
+        merged_data = []
+
+        # Process each record in the source data
+        for source_record in source_data:
+            transformed_record = {}
+
+            # Apply field mappings to create a transformed record
+            for source_field, source_value in source_record.items():
+                if source_field in mapping_dict:
+                    target_field = mapping_dict[source_field]
+                    transformed_record[target_field] = source_value
+                else:
+                    # If no mapping exists, keep the original field
+                    transformed_record[source_field] = source_value
+
+            # Check if this record already exists in target_data
+            match_found = False
+
+            for target_record in target_data:
+                # Match records based on the specified matching fields
+                matches = True
+                for field in matching_fields:
+                    # Get corresponding field name in target data
+                    target_field = mapping_dict.get(field, field)
+
+                    # Check if field exists in both records and values match
+                    source_value = transformed_record.get(target_field)
+                    target_value = target_record.get(target_field)
+
+                    if source_value != target_value:
+                        matches = False
+                        break
+
+                if matches:
+                    match_found = True
+
+                    # Merge records, with target_record taking precedence for non-null values
+                    merged_record = {**transformed_record}
+
+                    for field, value in target_record.items():
+                        if value is not None and value != "":
+                            merged_record[field] = value
+
+                    merged_data.append(merged_record)
+                    break
+
+            # If no match found, add the transformed record to merged data
+            if not match_found:
+                merged_data.append(transformed_record)
+
+        # Add any records from target_data that don't have matches in source_data
+        for target_record in target_data:
+            match_found = False
+
+            for merged_record in merged_data:
+                # Match records based on the specified matching fields
+                matches = True
+                for field in matching_fields:
+                    # Get corresponding field name in target data
+                    target_field = mapping_dict.get(field, field)
+
+                    # Check if field exists in both records and values match
+                    if target_field in merged_record and target_field in target_record:
+                        if merged_record[target_field] != target_record[target_field]:
+                            matches = False
+                            break
+                    else:
+                        matches = False
+                        break
+
+                if matches:
+                    match_found = True
+                    break
+
+            if not match_found:
+                merged_data.append(target_record)
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Data merged successfully using provided field mappings',
+            'merged_data': merged_data,
+            'merged_count': len(merged_data),
+            'source_count': len(source_data),
+            'target_count': len(target_data),
+            'matching_fields_used': matching_fields
+        })
+
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'status': 'error'
+        }), 500
+
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5002)
